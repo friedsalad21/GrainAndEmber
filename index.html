@@ -1,0 +1,476 @@
+<meta charset="utf-8">
+<title>Grain &amp; Ember</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* layout: one screen — title bar, tool bar, the glass jar in the middle, material shelf at the bottom. single dark look by choice */
+:root{
+  --bg:#0f0d0b; --glass:#17130f; --rim:#3a3027; --sel:#2a1d14;
+  --fg:#e9dfd1; --muted:#9a8b7a; --accent:#ff8a3d;
+  --display:"Silkscreen", ui-monospace, monospace;
+  --ui:"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.3 var(--ui);display:flex;flex-direction:column;overflow:hidden;padding-inline:16px;box-sizing:border-box}
+header{display:flex;align-items:center;gap:8px;padding-block:10px 8px;flex-wrap:wrap}
+h1{font:400 18px var(--display);letter-spacing:.04em;margin:0 auto 0 0}
+h1 span{color:var(--accent)}
+button,select{font:600 12px var(--ui);color:var(--fg);background:transparent;border:1px solid var(--rim);border-radius:6px;padding:6px 10px;cursor:pointer}
+select{background:var(--glass);padding:5px 6px}
+button:hover{border-color:var(--muted)}
+button[aria-pressed=true]{border-color:var(--accent);background:var(--sel)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#stats{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bar{display:flex;gap:14px;align-items:center;overflow-x:auto;padding-block:0 8px}
+.bar>*{flex:none}
+.bar label{display:flex;align-items:center;gap:6px;color:var(--muted)}
+input[type=range]{accent-color:var(--accent);width:80px}
+.seg{display:flex}
+.seg button{border-radius:0;margin-left:-1px}
+.seg button:first-child{border-radius:6px 0 0 6px;margin-left:0}
+.seg button:last-child{border-radius:0 6px 6px 0}
+.seg button[aria-pressed=true]{position:relative}
+.slot{display:flex;gap:4px}
+#stage{flex:1;min-height:0;overflow:hidden;display:grid;place-items:center}
+#wrap{position:relative}
+#c{display:block;image-rendering:pixelated;background:var(--glass);border:1px solid var(--rim);border-radius:4px;touch-action:none;cursor:none}
+#glow{position:absolute;inset:1px;pointer-events:none;mix-blend-mode:screen;opacity:.9}
+nav{display:flex;gap:8px;overflow-x:auto;padding-block:10px 4px}
+nav button{display:flex;align-items:center;gap:8px;flex:none}
+nav i{width:14px;height:14px;border-radius:3px;background:var(--c);box-shadow:inset 0 0 0 1px var(--rim)}
+kbd{color:var(--muted);font:11px var(--ui)}
+#hint{color:var(--muted);font-size:11px;padding-block:0 10px;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
+
+<header>
+  <h1>Grain <span>&amp;</span> Ember</h1>
+  <span id="stats"></span>
+  <button id="pause" aria-pressed="false">Pause</button>
+  <button id="undo" title="Ctrl+Z">Undo</button>
+  <button id="clear">Clear</button>
+</header>
+<div class="bar">
+  <div class="seg" id="modes" role="group" aria-label="Brush shape">
+    <button data-mode="0" aria-pressed="true">Brush</button><button data-mode="1" aria-pressed="false">Line</button><button data-mode="2" aria-pressed="false">Spray</button>
+  </div>
+  <label for="size">Size <input id="size" type="range" min="1" max="14" value="4"></label>
+  <label for="speed">Speed <input id="speed" type="range" min="1" max="4" value="1"></label>
+  <label for="wind" title="Double-click to reset">Wind <input id="wind" type="range" min="-3" max="3" value="0"></label>
+  <button id="gravity" aria-pressed="false" title="G">Gravity ↓</button>
+  <button id="heat" aria-pressed="false" title="H">Heat view</button>
+  <span class="slot"><select id="slot" aria-label="Save slot"><option value="1">Slot 1</option><option value="2">Slot 2</option><option value="3">Slot 3</option></select><button id="save">Save</button><button id="load">Load</button></span>
+</div>
+<div id="stage"><div id="wrap"><canvas id="c" aria-label="Sand canvas: drag to paint the selected material, right-drag to erase"></canvas><canvas id="glow" aria-hidden="true"></canvas></div></div>
+<nav id="tools" aria-label="Materials"></nav>
+<p id="hint"></p>
+
+<script>
+const E=0,SAND=1,WATER=2,STONE=3,WOOD=4,FIRE=5,BURN=6,SMOKE=7,LAVA=8,STEAM=9,ACID=10,PLANT=11,OIL=12,
+      POWDER=13,ICE=14,SALT=15,BRINE=16,CLONE=17,VOID=18;
+// [name, type, swatch, key, hint]
+const TOOLS=[
+  ["Sand",SAND,"#e2b866","1","Piles up and sinks through liquids."],
+  ["Water",WATER,"#3d8fd6","2","Flows and levels. Boils at 100°, freezes at 0°. Feeds plants."],
+  ["Salt",SALT,"#f0efe8","3","Dissolves into brine and melts ice. Boil brine to get salt back."],
+  ["Oil",OIL,"#5a4870","4","Floats on water. Very flammable."],
+  ["Acid",ACID,"#8fe03a","5","Eats almost anything. Stone resists it."],
+  ["Lava",LAVA,"#ff5a1f","6","1200° and slow. Cools to stone, and enough of it melts stone back."],
+  ["Fire",FIRE,"#ff8a3d","7","Rises, heats things up and burns out. Paint it on wood to set it alight."],
+  ["Steam",STEAM,"#c9d3dc","8","Rises, then condenses back into rain."],
+  ["Gunpowder",POWDER,"#4e4b52","9","Falls like sand. Explodes when lit or heated past 150°."],
+  ["Ice",ICE,"#b8def5","0","-40°. Freezes water it touches, melts above 0°."],
+  ["Wood",WOOD,"#8a5a34","q","Solid. Catches fire at 280°."],
+  ["Plant",PLANT,"#3fa34d","w","Grows into water. Brine kills it. Burns fast."],
+  ["Stone",STONE,"#7d7a76","r","Solid. Melts into lava above 850°."],
+  ["Clone",CLONE,"#c9a23a","c","Copies the first material that touches it, forever. Makes taps and volcanoes."],
+  ["Void",VOID,"#2a1638","v","Deletes anything that touches it. A drain."],
+  ["Eraser",E,"#17130f","e","Clears cells. Right-drag erases with any tool."],
+];
+
+const B=t=>1<<t, GAS=B(E)|B(SMOKE)|B(STEAM), GRAIN=GAS|B(WATER)|B(OIL)|B(ACID)|B(BRINE);
+// pass[t]: bitmask of cell types t can swap into, which encodes density
+const pass=new Uint32Array(32);
+pass[SAND]=pass[POWDER]=pass[SALT]=GRAIN;
+pass[WATER]=GAS|B(OIL);
+pass[BRINE]=GAS|B(OIL)|B(WATER);
+pass[ACID]=GAS|B(OIL)|B(WATER)|B(BRINE);
+pass[LAVA]=GAS|B(OIL);
+pass[OIL]=GAS;
+pass[FIRE]=pass[STEAM]=B(E)|B(SMOKE);
+pass[SMOKE]=B(E);
+const SOLID=B(E)|B(STONE)|B(WOOD)|B(PLANT)|B(ICE)|B(CLONE)|B(VOID); // never move; painting overwrites
+const LIVE=B(FIRE)|B(BURN)|B(SMOKE)|B(STEAM)|B(LAVA)|B(ACID)|B(SALT)|B(PLANT)|B(VOID); // keep their region awake
+const MOVER=GRAIN&~B(E)|B(SAND)|B(POWDER)|B(SALT)|B(LAVA)|B(FIRE), LIGHT=B(FIRE)|B(SMOKE)|B(STEAM);
+const EMIT=B(FIRE)|B(BURN)|B(LAVA);
+const ACIDFOOD=B(SAND)|B(WOOD)|B(PLANT)|B(OIL)|B(BURN)|B(POWDER)|B(SALT)|B(ICE);
+const FLAM=new Float32Array(32);FLAM[WOOD]=.1;FLAM[PLANT]=.25;FLAM[OIL]=.4;FLAM[POWDER]=1; // ignite chance per fire contact
+
+// temperature: heat conductivity, starting temperature, and phase changes
+const AMB=20;
+const cond=new Float32Array(32).fill(.1);
+cond[E]=cond[SMOKE]=.003;cond[STEAM]=.05;cond[WATER]=cond[BRINE]=cond[ICE]=cond[FIRE]=.3;
+cond[STONE]=cond[ACID]=cond[BURN]=.2;cond[LAVA]=.03;cond[WOOD]=cond[PLANT]=cond[POWDER]=.05;cond[CLONE]=cond[VOID]=0;
+const initT=new Int16Array(32).fill(AMB);initT[LAVA]=1200;initT[FIRE]=800;initT[BURN]=600;initT[STEAM]=120;initT[ICE]=-40;
+const hiT=new Int16Array(32).fill(32767),hiTo=new Uint8Array(32),loT=new Int16Array(32).fill(-32768),loTo=new Uint8Array(32);
+const hot=(t,T,to)=>{hiT[t]=T;hiTo[t]=to},cold=(t,T,to)=>{loT[t]=T;loTo[t]=to};
+hot(WATER,100,STEAM);cold(WATER,0,ICE);hot(BRINE,100,STEAM);cold(BRINE,-20,ICE);hot(ICE,1,WATER);
+cold(LAVA,500,STONE);hot(STONE,850,LAVA);hot(WOOD,280,BURN);hot(PLANT,150,BURN);hot(OIL,200,FIRE);hot(POWDER,150,FIRE);
+function lifeFor(t){return t===FIRE?20+R()*40:t===BURN?120+R()*120:t===SMOKE?30+R()*40:t===STEAM?120+R()*100:0}
+
+// palette: 8 shades per type, ABGR-packed for a Uint32 view over ImageData (little-endian)
+const pal=new Uint32Array(256);
+const abgr=c=>(255<<24|c[2]<<16|c[1]<<8|c[0])>>>0;
+const mix=(a,b,k)=>a.map((v,n)=>Math.round(v+(b[n]-v)*k));
+function ramp(t,a,b){for(let s=0;s<8;s++)pal[t<<3|s]=abgr(mix(a,b,s/7))}
+ramp(E,[23,19,15],[23,19,15]);
+ramp(SAND,[201,158,84],[236,200,122]);
+ramp(WATER,[36,104,178],[62,140,214]);
+ramp(STONE,[96,93,90],[132,128,124]);
+ramp(WOOD,[104,64,34],[138,92,52]);
+ramp(FIRE,[150,30,10],[255,226,120]);
+ramp(BURN,[70,24,12],[230,110,30]);
+ramp(SMOKE,[26,22,19],[78,72,68]);
+ramp(LAVA,[170,36,8],[255,150,40]);
+ramp(STEAM,[40,44,48],[170,180,190]);
+ramp(ACID,[96,184,40],[150,235,70]);
+ramp(PLANT,[36,112,46],[72,166,76]);
+ramp(OIL,[52,40,62],[84,66,96]);
+ramp(POWDER,[58,56,62],[92,88,96]);
+ramp(ICE,[160,200,228],[205,232,250]);
+ramp(SALT,[222,222,216],[250,250,244]);
+ramp(BRINE,[36,118,150],[64,150,180]);
+ramp(CLONE,[150,118,36],[200,165,60]);
+ramp(VOID,[34,16,48],[50,24,70]);
+// heat view: -60° blue, room temp near-black, then red, orange, yellow, white at 1300°
+const heatPal=new Uint32Array(256);
+{const st=[[-60,[40,100,255]],[20,[16,16,20]],[200,[140,28,28]],[600,[255,106,0]],[1000,[255,216,74]],[1300,[255,255,255]]];
+ for(let k=0;k<256;k++){const T=-60+k*1360/255;let s=1;while(s<st.length-1&&T>st[s][0])s++;
+  heatPal[k]=abgr(mix(st[s-1][1],st[s][1],Math.min(1,Math.max(0,(T-st[s-1][0])/(st[s][0]-st[s-1][0])))))}}
+const RING=0xffd8e8f0; // brush outline
+
+const $=id=>document.getElementById(id);
+const cv=$('c'),ctx=cv.getContext('2d'),gcv=$('glow'),gctx=gcv.getContext('2d'),stage=$('stage');
+const size=$('size'),speed=$('speed'),windEl=$('wind'),statsEl=$('stats'),hint=$('hint');
+let W=0,H=0,N=0,CW=0,CH=0,type,shade,life,temp,clock,awake,next,img,px,gimg,gpx,frame=1,g=1,wind=0,heatView=false;
+const R=Math.random;
+
+// grid sized to ~60k cells whatever the screen; on resize keep contents, bottom-aligned
+function alloc(){
+  const r=stage.getBoundingClientRect();
+  const c=Math.max(2,Math.ceil(Math.sqrt(r.width*r.height/60000)));
+  const W2=Math.max(16,r.width/c|0),H2=Math.max(16,r.height/c|0);
+  cv.style.width=gcv.style.width=W2*c+'px';cv.style.height=gcv.style.height=H2*c+'px';
+  gcv.style.filter=`blur(${c*2.5}px)`;
+  if(W2===W&&H2===H)return;
+  const n=W2*H2,t2=new Uint8Array(n),s2=new Uint8Array(n),l2=new Uint8Array(n),k2=new Int16Array(n).fill(AMB);
+  for(let y=0;y<H;y++){const y2=y+H2-H;if(y2<0||y2>=H2)continue;
+    for(let x=0;x<Math.min(W,W2);x++){const a=y*W+x,b=y2*W2+x;t2[b]=type[a];s2[b]=shade[a];l2[b]=life[a];k2[b]=temp[a]}}
+  W=W2;H=H2;N=n;type=t2;shade=s2;life=l2;temp=k2;clock=new Uint32Array(N);
+  CW=Math.ceil(W/16);CH=Math.ceil(H/16);awake=new Uint8Array(CW*CH);next=new Uint8Array(CW*CH).fill(1);
+  cv.width=gcv.width=W;cv.height=gcv.height=H;
+  img=ctx.createImageData(W,H);px=new Uint32Array(img.data.buffer);
+  gimg=gctx.createImageData(W,H);gpx=new Uint32Array(gimg.data.buffer);
+  undoStack.length=0;
+}
+
+// sleeping regions: the grid is split into 16x16 chunks; a chunk is simulated next step only if
+// something in or next to it changed. Settled piles, still water and empty air cost nothing.
+function wake(i){
+  const y=i/W|0,x=i-y*W,cx=x>>4,cy=y>>4,lx=x&15,ly=y&15;
+  const xa=lx===0&&cx>0?cx-1:cx,xb=lx===15&&cx<CW-1?cx+1:cx,ya=ly===0&&cy>0?cy-1:cy,yb=ly===15&&cy<CH-1?cy+1:cy;
+  for(let a=ya;a<=yb;a++)for(let b=xa;b<=xb;b++)next[a*CW+b]=1;
+}
+const wakeAll=()=>next.fill(1);
+
+function set(i,t,l){type[i]=t;life[i]=l;shade[i]=R()*8|0;clock[i]=frame;wake(i)}
+function put(i,t){set(i,t,lifeFor(t));temp[i]=initT[t]}
+function swap(i,j){
+  const t=type[i],s=shade[i],l=life[i],k=temp[i];
+  type[i]=type[j];shade[i]=shade[j];life[i]=life[j];temp[i]=temp[j];type[j]=t;shade[j]=s;life[j]=l;temp[j]=k;
+  clock[i]=clock[j]=frame;wake(i);wake(j);
+}
+function mv(i,x,y){
+  if(x<0||x>=W||y<0||y>=H)return false;
+  const j=y*W+x;
+  if(pass[type[i]]>>type[j]&1){swap(i,j);return true}
+  return false;
+}
+// slide sideways up to `reach` cells and land on the farthest free one, so pools level fast
+function spread(i,x,d,reach){
+  const m=pass[type[i]];let j=-1;
+  for(let s=1;s<=reach;s++){const x2=x+d*s;if(x2<0||x2>=W||!(m>>type[i+d*s]&1))break;j=i+d*s}
+  if(j<0)return false;
+  swap(i,j);return true;
+}
+const fall=(i,x,y,d)=>mv(i,x,y+g)||mv(i,x+d,y+g)||mv(i,x-d,y+g);
+const liquid=(i,x,y,d,reach)=>fall(i,x,y,d)||spread(i,x,d,reach)||spread(i,x,-d,reach);
+const rise=(i,x,y,d)=>mv(i,x+(R()*3|0)-1,y-g)||mv(i,x+d,y);
+const above=(j,y)=>(j/W|0)===y-g;
+// one random 8-neighbour, or -1 off-grid; one per step makes heat flow and reactions naturally probabilistic
+function nb(x,y){const x2=x+(R()*3|0)-1,y2=y+(R()*3|0)-1;return x2<0||x2>=W||y2<0||y2>=H?-1:y2*W+x2}
+function ignite(j){
+  const t=type[j];
+  if(t===WOOD)set(j,BURN,lifeFor(BURN));
+  else if(t===PLANT)set(j,BURN,20+R()*30);
+  else if(t===OIL)set(j,FIRE,60+R()*80);
+  else if(t===POWDER){temp[j]=900;wake(j)}
+}
+// gunpowder: everything nearby but stone turns to fire; nearby powder gets heated and goes off next, so chains ripple
+function boom(cx,cy){
+  for(let y=-4;y<=4;y++)for(let x=-4;x<=4;x++){
+    const X=cx+x,Y=cy+y;
+    if(x*x+y*y>18||X<0||X>=W||Y<0||Y>=H)continue;
+    const k=Y*W+X,t=type[k];
+    if(t===STONE||t===CLONE||t===VOID)continue;
+    if(t===POWDER&&(x||y)){temp[k]=900;wake(k);continue}
+    if(t===WATER||t===BRINE){set(k,STEAM,lifeFor(STEAM));temp[k]=150;continue}
+    set(k,FIRE,10+R()*25);temp[k]=900;
+  }
+}
+function heatUp(i,t,x,y){
+  if(t===POWDER)return boom(x,y);
+  if(t===BRINE)return set(i,R()<.25?SALT:STEAM,lifeFor(STEAM)); // boiling brine leaves salt behind
+  const to=hiTo[t];
+  set(i,to,t===PLANT?20+R()*30:lifeFor(to));
+}
+
+function cell(x,y){
+  const i=y*W+x;
+  if(clock[i]===frame)return;
+  const t=type[i],j=nb(x,y),tj=j<0?-1:type[j];
+  if(j>=0){ // swap a little heat with one neighbour
+    const k=Math.min(cond[t],cond[tj]);
+    if(k){const dT=(temp[j]-temp[i])*k|0;if(dT){temp[i]+=dT;temp[j]-=dT;wake(i);wake(j)}}
+  }
+  if(t===E){const dT=(AMB-temp[i])>>2;if(dT){temp[i]+=dT;wake(i)}return} // open air drifts back to room temperature
+  const T=temp[i];
+  if(T>=hiT[t]){heatUp(i,t,x,y);return}
+  if(T<=loT[t]){set(i,loTo[t],0);return}
+  if(LIVE>>t&1)wake(i);
+  if(wind&&MOVER>>t&1&&R()<(LIGHT>>t&1?.25:.07)*Math.abs(wind)&&mv(i,x+Math.sign(wind),y))return;
+  const d=R()<.5?-1:1;
+  switch(t){
+  case SAND: case POWDER:
+    fall(i,x,y,d);break;
+  case SALT:
+    if(tj===WATER&&R()<.05){set(i,E,0);set(j,BRINE,0);break}
+    if(tj===ICE&&R()<.05){set(j,WATER,0);temp[j]=1;break}
+    fall(i,x,y,d);break;
+  case WATER:
+    if(R()<.02)shade[i]=R()*8|0; // shimmer
+    liquid(i,x,y,d,4);break;
+  case BRINE:
+    liquid(i,x,y,d,3);break;
+  case OIL:
+    liquid(i,x,y,d,2);break;
+  case ACID:
+    if(ACIDFOOD>>tj&1&&R()<.2){
+      set(j,R()<.3?SMOKE:E,25);
+      if(R()<.3){set(i,E,0);break} // acid is used up as it eats
+    }
+    liquid(i,x,y,d,3);break;
+  case PLANT:
+    if(tj===WATER&&R()<.03)set(j,PLANT,0); // plants drink and grow
+    else if(tj===BRINE&&R()<.02)set(i,E,0);
+    break;
+  case LAVA:
+    if(tj===WATER||tj===BRINE){set(i,STONE,0);temp[i]=400;set(j,STEAM,lifeFor(STEAM));temp[j]=150;break}
+    if(FLAM[tj])ignite(j);
+    else if(tj===E&&R()<.01&&above(j,y)){set(j,FIRE,8+R()*10);temp[j]=700}
+    if(R()<.3)shade[i]=R()*8|0;
+    if(!fall(i,x,y,d)&&R()<.3)spread(i,x,d,1)||spread(i,x,-d,1); // falls freely, spreads slowly
+    break;
+  case FIRE:
+    if(tj===WATER||tj===BRINE){set(i,E,0);if(R()<.5){set(j,STEAM,lifeFor(STEAM));temp[j]=120}break}
+    if(R()<FLAM[tj])ignite(j);
+    if(temp[i]<700)temp[i]=700;
+    if(--life[i]===0){R()<.4?set(i,SMOKE,30+R()*40):set(i,E,0);break}
+    shade[i]=Math.min(7,life[i]>>2);
+    if(R()<.6)mv(i,x+(R()*3|0)-1,y-g);
+    break;
+  case BURN:
+    if(tj===WATER||tj===BRINE){set(i,WOOD,0);temp[i]=100;set(j,STEAM,lifeFor(STEAM));temp[j]=120;break}
+    if(R()<FLAM[tj]*.3)ignite(j);
+    else if(tj===E&&R()<.25&&above(j,y)){set(j,FIRE,8+R()*20);temp[j]=700} // flames lick upward
+    if(temp[i]<600)temp[i]=600;
+    if(--life[i]===0){set(i,R()<.5?SMOKE:E,40);break}
+    shade[i]=R()*8|0;break;
+  case STEAM:
+    if(--life[i]===0){if(R()<.35){set(i,WATER,0);temp[i]=40}else set(i,E,0);break} // condenses into rain
+    shade[i]=Math.min(7,life[i]>>4);
+    if(R()<.8)rise(i,x,y,d);
+    break;
+  case SMOKE:
+    if(--life[i]===0){set(i,E,0);break}
+    shade[i]=Math.min(7,life[i]>>3);
+    if(R()<.7)rise(i,x,y,d);
+    break;
+  case CLONE:
+    if(!life[i]){if(tj>0&&tj!==CLONE&&tj!==VOID)life[i]=tj;break} // life holds the copied material
+    wake(i);
+    if(tj===E&&R()<.3)put(j,life[i]);
+    break;
+  case VOID:
+    if(tj>0&&tj!==VOID&&tj!==CLONE){set(j,E,0);temp[j]=AMB}
+    break;
+  }
+}
+
+let awakeShare=1;
+function step(){
+  frame++;
+  [awake,next]=[next,awake];next.fill(0);
+  let a=0;for(let c=0;c<awake.length;c++)a+=awake[c];awakeShare=a/awake.length;
+  for(let y=g>0?H-1:0;y>=0&&y<H;y-=g){ // scan from the floor up, wherever the floor is
+    const row=(y>>4)*CW,flip=(frame^y)&1; // alternate scan direction to avoid left/right bias
+    for(let c=0;c<CW;c++){
+      const cx=flip?c:CW-1-c;
+      if(!awake[row+cx])continue;
+      const xa=cx<<4,xb=Math.min(W,xa+16);
+      if(flip)for(let x=xa;x<xb;x++)cell(x,y);
+      else for(let x=xb-1;x>=xa;x--)cell(x,y);
+    }
+  }
+}
+
+// undo: a copy of the world before each stroke, clear or load
+const undoStack=[];
+function snapshot(){
+  undoStack.push({W,H,type:type.slice(),life:life.slice(),temp:temp.slice(),shade:shade.slice()});
+  if(undoStack.length>20)undoStack.shift();
+}
+function undo(){
+  const s=undoStack.pop();
+  if(!s)return say('Nothing to undo.');
+  if(s.W!==W||s.H!==H)return say('Undo history was cleared when the window changed size.');
+  type.set(s.type);life.set(s.life);temp.set(s.temp);shade.set(s.shade);wakeAll();
+}
+
+// save slots: material + life bytes, gzipped by the browser, stored in this browser only
+const KEY='grain-ember-slot-';
+async function save(n){
+  const raw=new Uint8Array(N*2);raw.set(type);raw.set(life,N);
+  const gz=new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+  let s='';for(let k=0;k<gz.length;k+=0x8000)s+=String.fromCharCode.apply(null,gz.subarray(k,k+0x8000));
+  try{localStorage.setItem(KEY+n,JSON.stringify({W,H,d:btoa(s)}));say(`Saved to slot ${n}.`)}
+  catch{say("Couldn't save: this browser is blocking storage for this page.")}
+}
+async function load(n){
+  let v=null;try{v=JSON.parse(localStorage.getItem(KEY+n))}catch{}
+  if(!v)return say(`Slot ${n} is empty. Save something there first.`);
+  const bin=Uint8Array.from(atob(v.d),c=>c.charCodeAt(0));
+  const raw=new Uint8Array(await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  snapshot();type.fill(E);life.fill(0);temp.fill(AMB);
+  for(let y=0;y<v.H;y++){const y2=y+H-v.H;if(y2<0||y2>=H)continue; // bottom-aligned if the screen size differs
+    for(let x=0;x<Math.min(W,v.W);x++){const a=y*v.W+x,b=y2*W+x,t=raw[a];type[b]=t;life[b]=raw[v.W*v.H+a];temp[b]=initT[t];shade[b]=R()*8|0}}
+  wakeAll();say(`Loaded slot ${n}.`);
+}
+
+// painting
+const BRUSH=0,LINE=1,SPRAY=2;
+let tool=SAND,mode=BRUSH,down=false,erasing=false,lx=0,ly=0,sx=0,sy=0,hx=-1,hy=-1;
+function paintAt(cx,cy,dens){
+  const t=erasing?E:tool,solid=SOLID>>t&1,r=+size.value*(mode===SPRAY?2:1);
+  if(dens===undefined)dens=mode===SPRAY?.03:solid?1:.35;
+  for(let y=-r;y<=r;y++)for(let x=-r;x<=r;x++){
+    const X=cx+x,Y=cy+y;
+    if(x*x+y*y>r*r+r||X<0||X>=W||Y<0||Y>=H||R()>=dens)continue;
+    const i=Y*W+X;
+    if(solid){if(type[i]!==t)put(i,t)}
+    else if(t===FIRE&&FLAM[type[i]])ignite(i);
+    else if(type[i]===E)put(i,t);
+  }
+}
+function line(x0,y0,x1,y1,fn){const n=Math.max(Math.abs(x1-x0),Math.abs(y1-y0),1);for(let s=0;s<=n;s++)fn(Math.round(x0+(x1-x0)*s/n),Math.round(y0+(y1-y0)*s/n))}
+function toGrid(e){const b=cv.getBoundingClientRect();return[Math.floor((e.clientX-b.left)/b.width*W),Math.floor((e.clientY-b.top)/b.height*H)]}
+cv.oncontextmenu=e=>e.preventDefault();
+cv.onpointerdown=e=>{
+  cv.setPointerCapture(e.pointerId);snapshot();
+  down=true;erasing=e.button===2;[lx,ly]=toGrid(e);sx=hx=lx;sy=hy=ly;
+  if(mode!==LINE)paintAt(lx,ly);
+};
+cv.onpointermove=e=>{
+  const[x,y]=toGrid(e);hx=x;hy=y;
+  if(!down)return;
+  if(mode===BRUSH)line(lx,ly,x,y,paintAt);
+  lx=x;ly=y;
+};
+cv.onpointerup=cv.onpointercancel=()=>{
+  if(down&&mode===LINE)line(sx,sy,lx,ly,(x,y)=>paintAt(x,y,1));
+  down=erasing=false;
+};
+cv.onpointerleave=e=>{if(e.pointerType==='mouse')hx=-1};
+function overlay(){ // brush outline and line preview, drawn over the frame, not into the world
+  const dot=(x,y)=>{if(x>=0&&x<W&&y>=0&&y<H)px[y*W+x]=RING};
+  if(down&&mode===LINE)line(sx,sy,lx,ly,dot);
+  if(hx<0)return;
+  const r=+size.value*(mode===SPRAY?2:1)+.5,n=Math.max(8,r*7|0);
+  for(let a=0;a<n;a++)dot(hx+Math.round(Math.cos(a/n*6.2832)*r),hy+Math.round(Math.sin(a/n*6.2832)*r));
+}
+
+// UI
+const nav=$('tools');
+let hintTimer=0,toolHint='';
+function say(msg){hint.textContent=msg;clearTimeout(hintTimer);hintTimer=setTimeout(()=>hint.textContent=toolHint,2500)}
+function pick(b,t,h){tool=t;toolHint=hint.textContent=h;nav.querySelectorAll('button').forEach(o=>o.setAttribute('aria-pressed',o===b))}
+TOOLS.forEach(([name,t,c,key,h])=>{
+  const b=document.createElement('button');
+  b.innerHTML=`<i style="--c:${c}"></i>${name} <kbd>${key}</kbd>`;
+  b.dataset.key=key;
+  b.onclick=()=>pick(b,t,h);
+  nav.append(b);
+});
+pick(nav.children[0],SAND,TOOLS[0][4]);
+$('modes').onclick=e=>{const b=e.target.closest('button');if(!b)return;mode=+b.dataset.mode;$('modes').querySelectorAll('button').forEach(o=>o.setAttribute('aria-pressed',o===b))};
+const toggle=(id,on,label)=>{const b=$(id);b.setAttribute('aria-pressed',on);if(label)b.textContent=label};
+let paused=false;
+const togglePause=()=>{paused=!paused;toggle('pause',paused,paused?'Play':'Pause')};
+const toggleGravity=()=>{g=-g;toggle('gravity',g<0,g>0?'Gravity ↓':'Gravity ↑');wakeAll()};
+const toggleHeat=()=>{heatView=!heatView;toggle('heat',heatView);gpx.fill(0);gctx.putImageData(gimg,0,0)};
+$('pause').onclick=togglePause;$('gravity').onclick=toggleGravity;$('heat').onclick=toggleHeat;$('undo').onclick=undo;
+$('clear').onclick=()=>{snapshot();type.fill(E);temp.fill(AMB);wakeAll()};
+windEl.oninput=()=>{wind=+windEl.value;wakeAll()};
+windEl.ondblclick=()=>{windEl.value=wind=0};
+$('save').onclick=()=>save($('slot').value);
+$('load').onclick=()=>load($('slot').value);
+addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo();return}
+  if(e.ctrlKey||e.metaKey||e.altKey||e.target.matches('input,select'))return;
+  const k=e.key.toLowerCase();
+  if(k===' '){if(e.target.matches('button'))return;e.preventDefault();togglePause();return}
+  if(k==='g')return toggleGravity();
+  if(k==='h')return toggleHeat();
+  nav.querySelector(`[data-key="${CSS.escape(k)}"]`)?.click();
+});
+
+// starter scene: sand and a gunpowder charge on a wooden shelf with a fire at its leg;
+// lava dripping into a planted basin of oil-topped water; a tap pouring into an ice tray
+function rect(t,x0,y0,x1,y1){for(let y=y0*H|0;y<y1*H;y++)for(let x=x0*W|0;x<x1*W;x++)put(y*W+x,t)}
+alloc();
+rect(STONE,.55,.6,.57,1);rect(STONE,.93,.6,.95,1);rect(WATER,.57,.68,.93,1);rect(OIL,.57,.64,.93,.68);
+rect(PLANT,.7,.97,.73,1);
+rect(WOOD,.08,.55,.45,.58);rect(WOOD,.12,.58,.15,1);rect(WOOD,.38,.58,.41,1);
+rect(SAND,.18,.3,.37,.55);rect(POWDER,.09,.5,.17,.55);
+rect(STONE,.6,.18,.88,.2);rect(LAVA,.78,.1,.86,.18);
+rect(FIRE,.08,.92,.115,1);
+rect(ICE,.2,.2,.32,.22);rect(ICE,.2,.12,.21,.2);rect(ICE,.31,.12,.32,.2);
+{const i=(.02*H|0)*W+(.26*W|0);put(i,CLONE);life[i]=WATER}
+new ResizeObserver(alloc).observe(stage);
+
+let lastStep=0,frames=0,fpsT=0;
+function loop(now){
+  if(down&&mode!==LINE)paintAt(lx,ly);
+  if(!paused&&now-lastStep>=15){for(let s=+speed.value;s--;)step();lastStep=now} // cap near 60 ticks/s on fast screens
+  if(heatView)for(let i=0;i<N;i++){const k=(temp[i]+60)*255/1360|0;px[i]=heatPal[k<0?0:k>255?255:k]}
+  else{
+    for(let i=0;i<N;i++){const t=type[i],c=pal[t<<3|shade[i]];px[i]=c;gpx[i]=EMIT>>t&1?c:0}
+    gctx.putImageData(gimg,0,0);
+  }
+  overlay();
+  ctx.putImageData(img,0,0);
+  frames++;
+  if(now-fpsT>500){statsEl.textContent=`${Math.round(frames*1000/(now-fpsT))} fps · ${Math.round(awakeShare*100)}% awake`;frames=0;fpsT=now}
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
